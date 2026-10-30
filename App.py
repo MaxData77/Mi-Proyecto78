@@ -44,11 +44,16 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# El modo oscuro se activa desde .streamlit/config.toml (ver instrucciones al final del README).
-# Los gráficos usan siempre un fondo oscuro sólido para que también se vean bien al descargarlos.
-BG_COLOR = "#0E1117"
-PALETTE = ["#7C85F5", "#34D399", "#FBBF24", "#F87171", "#38BDF8", "#C084FC", "#2DD4BF", "#FB923C"]
-ACCENT = PALETTE[0]
+# El modo oscuro de la página se activa desde .streamlit/config.toml.
+# Los gráficos tienen su propio estilo (fondo blanco, texto negro, Tahoma) para que se vean
+# igual en pantalla y al descargarlos.
+CHART_BG = "#FFFFFF"        # fondo del gráfico
+GRID_COLOR = "#D9D9D9"      # cuadrícula y ejes
+TEXT_COLOR = "#000000"      # títulos, ejes y leyendas
+FONT_FAMILY = "Tahoma, Verdana, Geneva, sans-serif"
+ACCENT = "#2F83FF"          # color principal (barras, histograma, líneas)
+PALETTE = [ACCENT, "#F97316", "#10B981", "#EF4444", "#8B5CF6", "#06B6D4", "#EAB308", "#EC4899"]
+TREND_COLOR = "#F97316"     # línea de tendencia en dispersión
 
 st.markdown(
     """
@@ -99,6 +104,18 @@ def fmt(x, decimals: int = 2) -> str:
         decimals = 0
     s = f"{x:,.{decimals}f}"
     return s.replace(",", "§").replace(".", ",").replace("§", ".")
+
+
+def hex_to_rgba(hex_color: str, alpha: float) -> str:
+    """'#2F83FF' -> 'rgba(47,131,255,0.3)' (para rellenos transparentes)."""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def build_palette(main: str) -> list[str]:
+    """Paleta que empieza por el color elegido; el resto de los colores sigue la paleta base."""
+    return [main] + [c for c in PALETTE if c.lower() != main.lower()]
 
 
 def fmt_r(r: float) -> str:
@@ -363,18 +380,22 @@ LESSONS = {
 
 
 def style_figure(fig: go.Figure, title: str, height: int = 430) -> go.Figure:
-    """Estilo común de todos los gráficos: tema oscuro, fondo sólido, título a la izquierda."""
+    """Estilo común de todos los gráficos: fondo blanco, cuadrícula y ejes #D9D9D9, texto negro, Tahoma."""
     fig.update_layout(
-        template="plotly_dark",
-        title=dict(text=title, x=0, xanchor="left", font=dict(size=16)),
-        paper_bgcolor=BG_COLOR,
-        plot_bgcolor=BG_COLOR,
+        template="plotly_white",
+        title=dict(text=title, x=0, xanchor="left", font=dict(size=16, color=TEXT_COLOR)),
+        paper_bgcolor=CHART_BG,
+        plot_bgcolor=CHART_BG,
         colorway=PALETTE,
         height=height,
         margin=dict(l=10, r=10, t=70, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, title_text=""),
-        font=dict(family="sans-serif", size=13),
+        font=dict(family=FONT_FAMILY, size=13, color=TEXT_COLOR),
     )
+    axis_style = dict(gridcolor=GRID_COLOR, linecolor=GRID_COLOR, zerolinecolor=GRID_COLOR,
+                      tickfont=dict(color=TEXT_COLOR), title_font=dict(color=TEXT_COLOR))
+    fig.update_xaxes(**axis_style)
+    fig.update_yaxes(**axis_style)
     return fig
 
 
@@ -436,9 +457,16 @@ def _series_over_x(df: pd.DataFrame, x: str, y: str, agg: str) -> pd.DataFrame:
 
 def make_chart(kind: str, df: pd.DataFrame, *, x: str | None = None, y: str | None = None,
                color: str | None = None, agg: str = "sum", top_n: int = 15,
-               numeric_cols: list[str] | None = None, title: str | None = None) -> go.Figure:
-    """Construye un gráfico Plotly. Lanza ValueError con un mensaje claro si la selección no sirve."""
+               numeric_cols: list[str] | None = None, title: str | None = None,
+               color_hex: str | None = None) -> go.Figure:
+    """Construye un gráfico Plotly. Lanza ValueError con un mensaje claro si la selección no sirve.
+
+    `color_hex` cambia el color principal: lo usan barras, líneas, área e histograma; en gráficos
+    con varias categorías (circular, caja, dispersión por color) es el primer color de la paleta.
+    """
     title = title or default_title(kind, x, y, agg)
+    main = color_hex or ACCENT
+    palette = build_palette(main)
 
     if kind == "Barras":
         table, val, axis_title = _group(df, x, y, agg)
@@ -451,19 +479,19 @@ def make_chart(kind: str, df: pd.DataFrame, *, x: str | None = None, y: str | No
         else:
             fig = px.bar(table, x=x, y=val, text_auto=".3s")
             fig.update_layout(xaxis_title=x, yaxis_title=axis_title)
-        fig.update_traces(marker_color=ACCENT, textposition="outside", cliponaxis=False)
+        fig.update_traces(marker_color=main, textposition="outside", cliponaxis=False)
 
     elif kind == "Líneas":
         series = _series_over_x(df, x, y, agg)
         fig = px.line(series, x=x, y=y, markers=len(series) <= 60)
-        fig.update_traces(line_color=ACCENT, marker_color=ACCENT)
+        fig.update_traces(line_color=main, marker_color=main)
         fig.update_layout(xaxis_title=x, yaxis_title=f"{AGG_NAME[agg]} de {y}")
 
     elif kind == "Área":
         series = _series_over_x(df, x, y, "sum")
         series[y] = series[y].cumsum()
         fig = px.area(series, x=x, y=y)
-        fig.update_traces(line_color=ACCENT, fillcolor="rgba(124,133,245,0.30)")
+        fig.update_traces(line_color=main, fillcolor=hex_to_rgba(main, 0.30))
         fig.update_layout(xaxis_title=x, yaxis_title=f"Acumulado de {y}")
 
     elif kind == "Dispersión":
@@ -481,13 +509,13 @@ def make_chart(kind: str, df: pd.DataFrame, *, x: str | None = None, y: str | No
         if len(d) > MAX_SCATTER_POINTS:
             d = d.sample(MAX_SCATTER_POINTS, random_state=0)
             title += f" (muestra de {fmt(MAX_SCATTER_POINTS)} filas)"
-        fig = px.scatter(d, x=x, y=y, color=color, opacity=0.8, color_discrete_sequence=PALETTE)
+        fig = px.scatter(d, x=x, y=y, color=color, opacity=0.8, color_discrete_sequence=palette)
         xv, yv = d[x].to_numpy(dtype=float), d[y].to_numpy(dtype=float)
         if len(d) >= 3 and np.ptp(xv) > 0:  # línea de tendencia (ajuste lineal)
             slope, intercept = np.polyfit(xv, yv, 1)
             xs = np.array([xv.min(), xv.max()])
             fig.add_trace(go.Scatter(x=xs, y=slope * xs + intercept, mode="lines", name="Tendencia lineal",
-                                     line=dict(color="#FBBF24", dash="dash")))
+                                     line=dict(color=TREND_COLOR, dash="dash")))
         fig.update_layout(xaxis_title=x, yaxis_title=y)
 
     elif kind == "Circular":
@@ -498,7 +526,7 @@ def make_chart(kind: str, df: pd.DataFrame, *, x: str | None = None, y: str | No
         if len(table) > 8:  # agrupa las categorías menores en «Otros»
             rest = table.iloc[7:][val].sum()
             table = pd.concat([table.head(7), pd.DataFrame({x: ["Otros"], val: [rest]})], ignore_index=True)
-        fig = px.pie(table, names=x, values=val, hole=0.45, color_discrete_sequence=PALETTE)
+        fig = px.pie(table, names=x, values=val, hole=0.45, color_discrete_sequence=palette)
         fig.update_traces(textinfo="percent", textposition="inside", sort=False)
 
     elif kind == "Histograma":
@@ -507,7 +535,7 @@ def make_chart(kind: str, df: pd.DataFrame, *, x: str | None = None, y: str | No
         if d.empty:
             raise ValueError("La columna no tiene valores numéricos.")
         fig = px.histogram(d, x=x, nbins=30, marginal="box")
-        fig.update_traces(marker_color=ACCENT)
+        fig.update_traces(marker_color=main)
         fig.update_layout(xaxis_title=x, yaxis_title="Cantidad de registros")
 
     elif kind == "Caja":
@@ -519,7 +547,7 @@ def make_chart(kind: str, df: pd.DataFrame, *, x: str | None = None, y: str | No
         d = d[d[x].isin(keep)]
         if d.empty:
             raise ValueError("No hay datos válidos con esta selección.")
-        fig = px.box(d, x=x, y=y, color=x, points="outliers", color_discrete_sequence=PALETTE)
+        fig = px.box(d, x=x, y=y, color=x, points="outliers", color_discrete_sequence=palette)
         fig.update_layout(showlegend=False, xaxis_title=x, yaxis_title=y)
 
     elif kind == "Mapa de correlación":
@@ -959,9 +987,21 @@ def render_custom(df: pd.DataFrame, types: ColumnTypes, agg: str, top_n: int, le
     else:  # Mapa de correlación
         numeric_cols = st.multiselect("Columnas numéricas", types.numeric, default=types.numeric[:12], key=f"cn_{kind}")
 
+    # Selector de color (paleta). No aplica al mapa de correlación, que usa una escala fija de -1 a 1.
+    color_hex = None
+    if kind != "Mapa de correlación":
+        picker_col, note_col = st.columns([1, 3])
+        color_hex = picker_col.color_picker("Color del gráfico", value=ACCENT, key="custom_color")
+        multi_category = kind in ("Circular", "Caja") or (kind == "Dispersión" and color is not None)
+        note_col.caption(
+            "Este gráfico usa varios colores: el que elijas es el de la primera categoría y el resto sigue la paleta."
+            if multi_category else "Cambia el color principal del gráfico."
+        )
+
     try:
         title = default_title(kind, x, y, agg)
-        fig = make_chart(kind, df, x=x, y=y, color=color, agg=agg, top_n=top_n, numeric_cols=numeric_cols, title=title)
+        fig = make_chart(kind, df, x=x, y=y, color=color, agg=agg, top_n=top_n, numeric_cols=numeric_cols,
+                         title=title, color_hex=color_hex)
         lesson = explain(kind, x, y, agg)
         render_chart_card(ChartSpec("custom", title, fig, **lesson), learning, png_enabled)
     except ValueError as exc:
@@ -1071,4 +1111,3 @@ def main() -> None:
 
 
 main()
-
